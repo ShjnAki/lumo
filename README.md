@@ -1,76 +1,83 @@
-# Lumo — surligneur de curseur pour Windows
+# Lumo — cursor highlighter for Windows
 
-Clone libre, inspiré de [Mouzz](https://mouzz.dev/) (macOS), écrit en Rust. Il ajoute le **curseur custom façon osu!** que tu voulais.
+🇬🇧 English · [🇫🇷 Français](README.fr.md)
 
-![Spotlight, ring et curseur](docs/1_spot_ring_cursor.png)
+Lumo is a free, open-source cursor highlighter for Windows, written in Rust. It is inspired by [Mouzz](https://mouzz.dev/) (macOS) and reproduces its free effects, then adds an **osu!-style custom cursor**, a **rainbow (RGB) ring** and **on-screen annotations**. Lumo is an independent project and is not affiliated with Mouzz.
 
-## Fonctionnalités
+![Spotlight, ring and cursor](docs/1_spot_ring_cursor.png)
 
-| Fonction (équivalent Mouzz gratuit) | Statut |
+## Features
+
+| Feature | Status |
 |---|---|
-| Spotlight : cercle, barre horizontale, barre verticale ; taille, assombrissement, douceur | ✅ |
-| Ring : taille, épaisseur, couleur, pulsation | ✅ (+ halo « neon », qui est du Pro chez Mouzz, + **effet RGB** arc-en-ciel rotatif) |
-| Traînée : 7 styles (ligne, comète, lueur, points, étoiles, cœurs kawaii, arc-en-ciel) | ✅ (+ un 8ᵉ style : `cursortrail.png` d'un skin osu!) |
-| Effets de clic : 7 styles (anneau, onde, pulsation, rayons, confettis, étoiles, cœurs) ; couleur distincte clic droit | ✅ |
-| Sons de clic : son intégré ou fichier `.wav` | ✅ |
-| Secouer la souris pour localiser le curseur | ✅ |
-| Raccourcis globaux personnalisables (aucun par défaut) | ✅ |
-| Icône de zone de notification : activer/désactiver, choix des styles | ✅ |
-| **Curseur custom osu!** (mode système ou overlay, skins `cursor.png`/`cursormiddle.png`/`cursortrail.png`) | ✅ (ajout) |
-| Annotations à l'écran : maintenir une touche et bouger la souris pour dessiner | ✅ (touche configurable, `Ctrl+Alt` par défaut : Windows ne voit pas Fn) |
-| Pro : enregistreur, sous-titres, caméra, frappes, zoom, loupe, focus mode | ❌ hors périmètre |
+| Spotlight: circle, horizontal bar, vertical bar; size, dimming, softness | ✅ |
+| Ring: size, thickness, colour, pulse, neon glow | ✅ (+ rotating **rainbow / RGB** effect) |
+| Trail: 7 styles (line, comet, glow, dots, stars, hearts, rainbow) | ✅ (+ an 8th style using an osu! skin's `cursortrail.png`) |
+| Click effects: 7 styles (ring, ripple, pulse, burst, confetti, stars, hearts); separate colour for right-click | ✅ |
+| Click sounds: built-in sound or your own `.wav` file | ✅ |
+| Shake the mouse to locate the cursor | ✅ |
+| Customisable global hotkeys (none set by default) | ✅ |
+| Tray icon: toggle effects, pick styles | ✅ |
+| Settings window with live preview | ✅ |
+| **osu!-style custom cursor** (system or overlay mode, osu! skins supported) | ✅ |
+| On-screen annotations: hold a key and move the mouse to draw | ✅ (configurable key, `Ctrl+Alt` by default) |
+| Mouzz Pro features (recorder, captions, camera, keystrokes, zoom, magnifier, focus mode) | ❌ out of scope |
 
-Les réglages se font dans la **fenêtre de réglages** (clic gauche sur l'icône de la zone de notification, ou au lancement), par le menu de l'icône (clic droit) **ou** dans `%APPDATA%\Lumo\settings.json`. Chaque changement est appliqué tout de suite (aperçu en direct) et enregistré. Le fichier est aussi rechargé à chaud.
+## Installation
 
-## Compiler
+Requirements: Windows 10 (1703 or later) or Windows 11.
 
-Prérequis : Rust (`rustup`) avec la toolchain MSVC (Visual Studio Build Tools, charge de travail « Desktop development with C++ »). Tu as déjà ça pour le projet Tauri.
+**From source**, with [Rust](https://rustup.rs/) and the MSVC toolchain (Visual Studio Build Tools, "Desktop development with C++" workload):
 
 ```powershell
+git clone https://github.com/ShjnAki/lumo.git
+cd lumo
 cargo build --release
-# -> target\release\lumo.exe  (exécutable autonome)
+# -> target\release\lumo.exe  (standalone executable)
 ```
 
-Sans toolchain locale, pousse le dépôt sur GitHub : le workflow `.github/workflows/build.yml` compile sur `windows-latest` et publie `lumo.exe` en artefact.
+The GitHub Actions workflow in `.github/workflows/build.yml` also builds `lumo.exe` on `windows-latest` and uploads it as a build artifact.
 
-## Utilisation
+## Usage
 
-1. Lance `lumo.exe` : une icône rose apparaît près de l'horloge. Le ring et les clics sont actifs par défaut.
-2. La fenêtre de réglages s'ouvre au lancement (`lumo.exe --minimized` pour démarrer seulement dans la zone de notification). Clic gauche sur l'icône : rouvre la fenêtre. Clic droit : menu complet (dont « Tout activer/désactiver »).
-3. `lumo.exe --restore-cursors` rend les curseurs Windows d'origine si le programme a été tué brutalement (gestionnaire des tâches).
+1. Run `lumo.exe`. A tray icon appears near the clock and the settings window opens. The ring and click effects are enabled by default.
+2. **Left-click** the tray icon to reopen the settings window. **Right-click** it for the full menu. Start with `lumo.exe --minimized` to launch straight into the tray.
+3. Every change is applied immediately and saved to `%APPDATA%\Lumo\settings.json`. The file is also reloaded live when edited by hand.
+4. If Lumo is killed abruptly (Task Manager), run `lumo.exe --restore-cursors` to bring back the original Windows cursors.
 
-### Curseur osu!
+All settings are listed in [`settings.example.json`](settings.example.json). Colours use `#RRGGBB` or `#RRGGBBAA`.
 
-Dans `settings.json` :
+### osu!-style cursor
 
 ```json
 "cursor": {
   "mode": "overlay",
   "size": 48,
   "color": "#ff66aa",
-  "skin_dir": "C:/Users/toi/AppData/Local/osu!/Skins/MonSkin",
+  "skin_dir": "C:/Users/you/AppData/Local/osu!/Skins/MySkin",
   "press_scale": 1.25,
-  "rotate": false
+  "rotate": false,
+  "outline": false
 }
 ```
 
-- `"mode": "system"` : le vrai curseur Windows est remplacé par l'image (zéro latence, pas d'animation).
-- `"mode": "overlay"` : le curseur natif est masqué et l'app dessine le sien, avec agrandissement au clic (`press_scale`) et rotation optionnelle (`rotate`).
-- `skin_dir` : dossier d'un skin osu! (variantes `@2x` préférées). Laisse vide pour le curseur généré. Utilise des `/` ou des `\\` dans le JSON.
-- `outline` (faux par défaut) : ajoute un liseré blanc autour du curseur généré.
-- Pour utiliser la traînée du skin : `"trail": { "enabled": true, "style": "skin" }`.
+- `"mode": "system"`: the real Windows cursor is replaced by the image (no added latency, no animation).
+- `"mode": "overlay"`: the native cursor is hidden and Lumo draws its own, with a size increase on click (`press_scale`) and optional rotation (`rotate`).
+- `skin_dir`: folder of an osu! skin (`cursor`, `cursormiddle`, `cursortrail`; `@2x` variants preferred). Leave empty for the generated cursor. Use `/` or `\\` in JSON paths.
+- `outline` (off by default): adds a white outline around the generated cursor.
+- To use the skin's trail: `"trail": { "enabled": true, "style": "skin" }`.
 
-### Anneau RGB
+### RGB ring
 
 ```json
 "ring": { "rgb": true, "rgb_speed": 120, "thickness": 6, "glow": true }
 ```
 
-Un dégradé arc-en-ciel tourne autour de l'anneau (dans la capture, 6ᵉ vignette, l'anneau RGB avec halo). `rgb_speed` est en degrés par seconde (`360` = un tour par seconde, négatif = sens inverse). `rgb` remplace la teinte de `color`, mais son opacité est conservée. Il s'applique aussi à l'anneau « secouer pour localiser » et se règle dans le menu : *Anneau → Effet RGB*.
+A rainbow gradient rotates around the ring. `rgb_speed` is in degrees per second (`360` = one turn per second, negative = reverse direction). `rgb` replaces the hue of `color` but keeps its opacity. It also applies to the "shake to locate" ring. It can be toggled from the tray menu: *Ring → RGB effect*.
 
 ### Annotations
 
-Maintiens **Ctrl gauche + Alt gauche** et bouge la souris : un tracé se dessine, sans cliquer. Au relâchement, il s'efface après 2,5 s.
+Hold **left Ctrl + left Alt** and move the mouse: a stroke is drawn, no click needed. Once released, it fades out after 2.5 s.
 
 ![Annotations](docs/4_annotations.png)
 
@@ -78,45 +85,61 @@ Maintiens **Ctrl gauche + Alt gauche** et bouge la souris : un tracé se dessine
 "annotate": { "enabled": true, "key": "Ctrl+Alt", "color": "#ff3b30", "width": 5, "fade_delay": 2.5 }
 ```
 
-- `key` : touches tenues simultanément (`Ctrl`, `Alt`, `Shift`, `Win` = touches de gauche ; `RCtrl`, `RAlt`, `RShift`, `RWin`, `CapsLock`, lettres, chiffres, `F1`–`F24`). Les touches de gauche évitent AltGr, qui vaut Ctrl gauche + Alt droit sur un clavier AZERTY.
-- `fade_delay` : secondes avant l'effacement ; `0` garde le tracé jusqu'à `clear_annotations` (raccourci ou menu « Effacer les annotations »).
+- `key`: keys held together (`Ctrl`, `Alt`, `Shift`, `Win` = left-hand keys; `RCtrl`, `RAlt`, `RShift`, `RWin`, `CapsLock`, letters, digits, `F1`–`F24`). Left-hand keys avoid AltGr, which counts as left Ctrl + right Alt on many layouts (AZERTY, for example).
+- `fade_delay`: seconds before the stroke fades; `0` keeps it until `clear_annotations` (hotkey or tray menu).
+- **The `Fn` key cannot be used.** On almost every keyboard it is handled by the keyboard firmware and Windows never sees it. A workaround is to remap a key to `F13`–`F24` with your keyboard software (iCUE, QMK/VIA, vendor tools), then set `"key": "F13"`.
 
-### Raccourcis
+### Hotkeys
 
 ```json
 "hotkeys": { "toggle_all": "Ctrl+Alt+L", "toggle_spotlight": "Ctrl+Alt+S", "clear_annotations": "Ctrl+Alt+C" }
 ```
 
-Un modificateur (`Ctrl`, `Alt`, `Shift`, `Win`) est obligatoire. Touches : lettres, chiffres, `F1`–`F24`. Les raccourcis déjà pris par une autre application sont ignorés sans message.
+At least one modifier (`Ctrl`, `Alt`, `Shift`, `Win`) is required. Keys: letters, digits, `F1`–`F24`. A hotkey already taken by another application is silently ignored.
 
-Toutes les clés sont listées dans `settings.example.json`. Les couleurs sont en `#RRGGBB` ou `#RRGGBBAA`.
+## Known limitations
+
+- **Trail latency**: the trail visibly lags behind the cursor. Every visible monitor is currently repainted in full on each frame, and the position is polled every ~8 ms. Planned fixes: repaint only the changed area, render only the active monitor, use the positions from the mouse hook. See the roadmap below.
+- **Exclusive full-screen games**: no overlay can be drawn on top (a Windows limitation). Borderless full-screen works.
+- **Application-defined cursors** (some games, web pages using `cursor: url()`): not replaced, because only the standard system cursors are.
+- **System cursor mode**: the alpha channel passed to `CreateIconIndirect` is premultiplied. If the edges look dirty on your setup, switch to `overlay` mode.
+
+## Roadmap
+
+- A more polished settings interface.
+- Trail latency optimisation.
+- A "detect key" button in the settings window, to pick the annotation key.
+- A Linux port (the effects engine is portable; only the windowing layer is Windows-specific).
 
 ## Architecture
 
 ```
-src/settings.rs   réglages JSON (serde), couleurs, parsing des raccourcis
-src/fx.rs         moteur : état + rendu tiny-skia (portable, testé)
-src/skin.rs       chargement des skins osu! (PNG)
-src/schema.rs     description des réglages (pages, champs, bornes) qui pilote la fenêtre ; testée
-src/win.rs        couche Win32 : overlays, hook souris, tray, hotkeys, curseurs
-src/winui.rs      fenêtre de réglages native (onglets, curseurs, sélecteur de couleur), sans serveur ni navigateur
-build.rs + lumo.manifest   styles Windows modernes (comctl32 v6) et DPI par écran (MSVC)
-src/bin/preview   rendu de contrôle en PNG (planches dans docs/), tourne sous Linux
+src/settings.rs   JSON settings (serde), colours, hotkey parsing
+src/fx.rs         effects engine: state + tiny-skia rendering (portable, tested)
+src/skin.rs       osu! skin loading (PNG)
+src/schema.rs     description of the settings (pages, fields, bounds) driving the window; tested
+src/win.rs        Win32 layer: overlays, mouse hook, tray icon, hotkeys, cursors
+src/winui.rs      native settings window (tabs, sliders, colour picker), no server or browser
+build.rs + lumo.manifest   modern Windows control styles (comctl32 v6) and per-monitor DPI (MSVC)
+src/bin/preview   renders PNG test sheets (saved in docs/), runs on Linux
 ```
 
-- Une fenêtre `WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_NOACTIVATE` par écran, alpha par pixel via `UpdateLayeredWindow`. Elle ne capture aucun clic.
-- Les clics viennent d'un hook `WH_MOUSE_LL` ; la position vient de `GetCursorPos`, relevée toutes les ~8 ms.
-- Un écran sans rien à dessiner voit sa fenêtre masquée. Au repos, le rendu s'arrête.
+- One `WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_NOACTIVATE` window per monitor, per-pixel alpha through `UpdateLayeredWindow`. It never captures a click.
+- Clicks come from a `WH_MOUSE_LL` hook; the position comes from `GetCursorPos`, sampled every ~8 ms.
+- A monitor with nothing to draw has its window hidden. When idle, rendering stops.
+- Everything runs on a single thread; application state lives in `thread_local!` cells.
 
-## État de la vérification
+## Development and testing
 
-- Moteur d'effets et schéma des réglages : 18 tests unitaires, rendus PNG relus (`docs/`).
-- Couche Win32 (dont la fenêtre de réglages) : **type-check complet contre `windows-sys 0.59` réussi**, mais ni liée ni exécutée dans l'environnement de création (pas de cible Windows). Premier lancement : à surveiller.
+```powershell
+cargo test --lib            # effects engine and settings schema (portable)
+cargo run --release         # run Lumo (Windows, MSVC toolchain)
+cargo run --bin preview     # render PNG test sheets of the effects (docs/)
+```
 
-Points à vérifier en premier si quelque chose cloche :
+- The effects engine and the settings schema are covered by 18 unit tests; rendered output is checked through the PNG sheets in `docs/`.
+- The Win32 layer (overlays, hook, tray icon, settings window) has no automated tests and is verified by hand on Windows.
 
-1. **Halo autour du curseur système** : l'alpha de `CreateIconIndirect` est fourni prémultiplié. Si les bords semblent sales, passe en `overlay`, ou dé-prémultiplie dans `make_icon` (`win.rs`).
-2. **Jeux en plein écran exclusif** : aucun overlay ne passe au-dessus (limite de Windows). Le plein écran « sans bordure » fonctionne.
-3. **Latence de la traînée** (constatée) et performance sur grand écran : chaque écran visible est repeint en entier à chaque image, et la position vient d'un relevé toutes les ~8 ms. Pistes : ne repeindre que la zone modifiée, n'afficher que l'écran actif, utiliser les positions du hook souris. À optimiser ensuite.
-4. **Curseurs applicatifs custom** (certains jeux, navigateurs avec `cursor: url()`) : non remplacés, car seuls les curseurs système standards le sont.
-5. **Fenêtre de réglages** : mise en page jamais vue à l'écran (écrite à l'aveugle). Si des contrôles se chevauchent ou si les couleurs de fond sont fausses, signale-le avec une capture.
+## Contributing
+
+Issues and pull requests are welcome. When adding a setting, update `src/settings.rs` and `src/schema.rs`: the schema tests fail if a setting has no matching field in the window.
