@@ -466,9 +466,73 @@ impl Fx {
             || self.clicks.iter().any(|c| inside(c.x, c.y))
     }
 
+    /// Rectangles (x0, y0, x1, y1, coordonnées bureau) qui contiennent tout ce que `render` dessine,
+    /// hors assombrissement du spotlight : celui-ci couvre tout l'écran mais ne change pas d'une
+    /// image à l'autre, seul le trou (inclus ici) bouge. Un rectangle par élément, pour qu'un
+    /// tracé laissé sur un écran ne force pas à repeindre l'écran où se trouve la souris.
+    pub fn damage(&self) -> Vec<[f32; 4]> {
+        let mut out = Vec::new();
+        if !self.s.enabled {
+            return out;
+        }
+        let around = |x: f32, y: f32, r: f32| [x - r, y - r, x + r, y + r];
+        let bbox = |pts: &mut dyn Iterator<Item = (f32, f32, f32)>| {
+            let mut b: Option<[f32; 4]> = None;
+            for (x, y, r) in pts {
+                let a = around(x, y, r);
+                b = Some(b.map_or(a, |b| [b[0].min(a[0]), b[1].min(a[1]), b[2].max(a[2]), b[3].max(a[3])]));
+            }
+            b
+        };
+        let (px, py) = self.pos;
+        const M: f32 = 3.0; // anticrénelage
+
+        if self.has_pos {
+            let sp = &self.s.spotlight;
+            if sp.enabled {
+                let big = f32::MAX / 4.0;
+                out.push(match sp.shape {
+                    SpotShape::Circle => around(px, py, sp.size + M),
+                    SpotShape::HBar => [-big, py - sp.size - M, big, py + sp.size + M],
+                    SpotShape::VBar => [px - sp.size - M, -big, px + sp.size + M, big],
+                });
+            }
+            // anneau, localisateur et curseur sont centrés sur la souris
+            let mut r = 0.0f32;
+            let ring = &self.s.ring;
+            if ring.enabled {
+                let rad = ring.size * 1.12; // pulsation maximale
+                r = r.max(if ring.glow { rad * 1.9 } else { 0.0 }).max(rad + ring.thickness * 1.3);
+            }
+            if self.shake_age >= 0.0 {
+                r = r.max(ring.size * 3.6 * 1.5).max(ring.size * 3.6 + ring.thickness);
+            }
+            if self.s.cursor.mode == CursorMode::Overlay {
+                let scale = self.s.cursor.press_scale.max(1.0);
+                let half = |p: &Pixmap| (p.width() as f32).hypot(p.height() as f32) * 0.5 * scale;
+                r = r.max(half(&self.cur_main)).max(self.cur_mid.as_ref().map_or(0.0, half));
+            }
+            if r > 0.0 {
+                out.push(around(px, py, r + M));
+            }
+        }
+        if self.s.trail.enabled {
+            let r = self.s.trail.size * 1.8 + M;
+            out.extend(bbox(&mut self.trail.iter().map(|p| (p.x, p.y, r))));
+        }
+        out.extend(bbox(&mut self.particles.iter().map(|p| (p.x, p.y, p.size * 0.8 + M))));
+        out.extend(bbox(&mut self.clicks.iter().map(|c| (c.x, c.y, c.size * 1.15 + 6.0 + M))));
+        let w = self.s.annotate.width * 0.5 + 2.0 + M;
+        for st in &self.strokes {
+            out.extend(bbox(&mut st.pts.iter().map(|&(x, y)| (x, y, w))));
+        }
+        out
+    }
+
     // ---------------------------------------------------------------- rendu
 
     /// Dessine l'overlay pour un écran dont le coin haut-gauche est `origin` (coordonnées bureau virtuel).
+    /// `pm` peut ne couvrir qu'une partie de l'écran : seule cette zone est dessinée.
     pub fn render(&self, pm: &mut Pixmap, origin: (i32, i32)) {
         pm.fill(Color::TRANSPARENT);
         if !self.s.enabled {
@@ -1119,5 +1183,116 @@ mod tests {
             fx.update(0.016);
         }
         assert!(!fx.animating());
+    }
+
+    /// Une scène chargée : la souris décrit une courbe, clique, dessine et secoue.
+    fn busy(s: Settings) -> Fx {
+        let mut fx = Fx::new(s, Skin::default());
+        for i in 0..90 {
+            let k = i as f32 / 89.0;
+            fx.set_annotating((20..50).contains(&i));
+            fx.set_pos((150.0 + k * 500.0, 300.0 + (k * 9.0).sin() * 120.0));
+            if i % 15 == 0 {
+                fx.mouse_button(fx.pos(), if i % 30 == 0 { Button::Left } else { Button::Right }, true);
+                fx.mouse_button(fx.pos(), Button::Left, false);
+            }
+            fx.update(1.0 / 60.0);
+        }
+        fx.shake_age = 0.4; // localisateur en pleine animation
+        fx
+    }
+
+    fn variants() -> Vec<Settings> {
+        let mut out = Vec::new();
+        let trails = [TrailStyle::Line, TrailStyle::Comet, TrailStyle::Glow, TrailStyle::Dots, TrailStyle::Stars, TrailStyle::Hearts, TrailStyle::Rainbow, TrailStyle::Skin];
+        let clicks = [ClickStyle::Ring, ClickStyle::Ripple, ClickStyle::Pulse, ClickStyle::Burst, ClickStyle::Confetti, ClickStyle::Stars, ClickStyle::Hearts];
+        for (i, t) in trails.iter().enumerate() {
+            let mut s = Settings::default();
+            s.trail.enabled = true;
+            s.trail.style = *t;
+            s.trail.size = 30.0;
+            s.click.style = clicks[i % clicks.len()];
+            s.click.size = 120.0;
+            s.ring.glow = i % 2 == 0;
+            s.ring.pulse = i % 3 == 0;
+            s.ring.rgb = i % 4 == 1;
+            s.ring.thickness = 12.0;
+            s.cursor.mode = if i % 2 == 0 { CursorMode::Overlay } else { CursorMode::Off };
+            s.cursor.press_scale = 2.0;
+            s.cursor.rotate = true;
+            s.annotate.width = 20.0;
+            out.push(s);
+        }
+        out
+    }
+
+    #[test]
+    fn damage_covers_everything_drawn() {
+        for s in variants() {
+            let fx = busy(s);
+            let mut pm = Pixmap::new(900, 700).unwrap();
+            fx.render(&mut pm, (0, 0));
+            let rects = fx.damage();
+            assert!(!rects.is_empty());
+            for (i, px) in pm.pixels().iter().enumerate() {
+                if px.alpha() == 0 {
+                    continue;
+                }
+                let (x, y) = ((i % 900) as f32 + 0.5, (i / 900) as f32 + 0.5);
+                assert!(
+                    rects.iter().any(|r| x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3]),
+                    "pixel ({x}, {y}) dessiné hors des zones {rects:?} (trail {:?}, click {:?})",
+                    fx.s.trail.style,
+                    fx.s.click.style
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn partial_render_matches_full_render() {
+        // comme win.rs : on ne repeint que l'union des zones de `damage`, bornée à l'écran
+        let (ox, oy, w, h) = (-100, -50, 900u32, 700u32);
+        for (i, mut s) in variants().into_iter().enumerate() {
+            s.spotlight.enabled = i % 2 == 1;
+            s.spotlight.softness = 0.6;
+            let fx = busy(s);
+            let mut full = Pixmap::new(w, h).unwrap();
+            fx.render(&mut full, (ox, oy));
+            let u = fx.damage().into_iter().reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]).unwrap();
+            let clamp = |v: f32, lo: i32, hi: i32| (v.floor() as i64).clamp(lo as i64, hi as i64) as i32;
+            let (x0, y0) = (clamp(u[0], ox, ox + w as i32) - ox, clamp(u[1], oy, oy + h as i32) - oy);
+            let (x1, y1) = (clamp(u[2].ceil(), ox, ox + w as i32) - ox, clamp(u[3].ceil(), oy, oy + h as i32) - oy);
+            let (rw, rh) = ((x1 - x0) as u32, (y1 - y0) as u32);
+            let mut part = Pixmap::new(rw, rh).unwrap();
+            fx.render(&mut part, (ox + x0, oy + y0));
+            // quelques niveaux d'écart tolérés : tiny-skia ne découpe pas les lignes en blocs SIMD
+            // au même endroit selon la largeur du pixmap
+            for y in 0..rh {
+                for x in 0..rw {
+                    let a = full.pixel(x0 as u32 + x, y0 as u32 + y).unwrap();
+                    let b = part.pixel(x, y).unwrap();
+                    let d = [a.red() as i32 - b.red() as i32, a.green() as i32 - b.green() as i32, a.alpha() as i32 - b.alpha() as i32]
+                        .iter()
+                        .map(|d| d.abs())
+                        .max()
+                        .unwrap();
+                    assert!(d <= 6, "variante {i}, ({x}, {y}) : {a:?} != {b:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn nothing_to_repaint_when_disabled_or_idle() {
+        let mut s = Settings::default();
+        s.enabled = false;
+        assert!(busy(s).damage().is_empty());
+        let mut s = Settings::default();
+        s.ring.enabled = false;
+        s.click.enabled = false;
+        let mut fx = Fx::new(s, Skin::default());
+        fx.set_pos((10.0, 10.0));
+        assert!(fx.damage().is_empty());
     }
 }

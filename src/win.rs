@@ -4,13 +4,17 @@
 //! Tout tourne sur UN SEUL thread (celui de la boucle de messages) : le hook souris bas niveau,
 //! le WM_TIMER qui cadence le rendu et la fenêtre de contrôle. L'état partagé vit donc dans des
 //! `thread_local!` sans verrou.
+//!
+//! Rendu : seule la zone qui change (`Fx::damage`, plus la zone de l'image précédente) est
+//! redessinée, convertie et envoyée à Windows (`UpdateLayeredWindowIndirect` + `prcDirty`).
+//! Chaque mouvement de souris vu par le hook déclenche une image sans attendre le minuteur.
 
 #![allow(clippy::missing_safety_doc)]
 
 use lumo::fx::{Button, Fx};
 use lumo::settings::{parse_hold, parse_hotkey, ClickStyle, CursorMode, Rgba, Settings, SpotShape, TrailStyle};
 use lumo::skin::Skin;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::mem::{size_of, zeroed};
 use std::path::{Path, PathBuf};
@@ -33,9 +37,27 @@ extern "system" {
 }
 
 const WM_TRAY: u32 = WM_USER + 1;
+/// Posté par le hook souris : la souris a bougé, dessiner une image tout de suite.
+const WM_KICK: u32 = WM_USER + 2;
 const TIMER_ID: usize = 1;
 const TIMER_MS: u32 = 8;
+/// Écart minimal entre deux images déclenchées par la souris (une souris à 1000 Hz n'impose pas 1000 images/s).
+const KICK_MIN: Duration = Duration::from_millis(3);
 const WM_CONTEXTMENU_: u32 = 0x007B;
+/// Ouvre la fenêtre de réglages depuis la boucle de messages, hors de tout emprunt de l'App :
+/// la création de la WebView fait tourner des messages (rendu des effets compris).
+const WM_OPEN_SETTINGS: u32 = WM_APP + 10;
+/// Ordre des raccourcis dans `register_hotkeys` (identifiant = index + 1).
+const HOTKEY_PATHS: [&str; 8] = [
+    "hotkeys.toggle_all",
+    "hotkeys.toggle_spotlight",
+    "hotkeys.toggle_ring",
+    "hotkeys.toggle_trail",
+    "hotkeys.toggle_clicks",
+    "hotkeys.toggle_cursor",
+    "hotkeys.toggle_annotate",
+    "hotkeys.clear_annotations",
+];
 
 /// Curseurs système remplacés (flèche, texte, attente, croix, redimensionnements, main, etc.).
 const CURSOR_IDS: [u32; 13] = [
@@ -100,6 +122,9 @@ struct Ev {
 thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
     static EVENTS: RefCell<Vec<Ev>> = const { RefCell::new(Vec::new()) };
+    /// Fenêtre de contrôle (destinataire de WM_KICK) et « un WM_KICK est déjà en file ».
+    static CTL_HWND: Cell<usize> = const { Cell::new(0) };
+    static KICK_PENDING: Cell<bool> = const { Cell::new(false) };
 }
 
 pub(crate) fn with_app<R>(f: impl FnOnce(&mut App) -> R) -> Option<R> {
@@ -110,15 +135,29 @@ pub(crate) fn with_app<R>(f: impl FnOnce(&mut App) -> R) -> Option<R> {
 
 // ------------------------------------------------------------------ overlay (une fenêtre par écran)
 
+/// Rectangle en coordonnées locales à un écran : (x0, y0, x1, y1), x1 et y1 exclus.
+type Zone = (i32, i32, i32, i32);
+
+fn union(a: Option<Zone>, b: Option<Zone>) -> Option<Zone> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some((a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3))),
+        (a, b) => a.or(b),
+    }
+}
+
 struct Overlay {
     hwnd: HWND,
     rect: (i32, i32, i32, i32),
-    pm: Pixmap,
     mem_dc: HDC,
     bmp: HBITMAP,
     old_bmp: HGDIOBJ,
+    /// Image complète de l'écran (BGRA prémultiplié), mise à jour zone par zone.
     bits: *mut u8,
     shown: bool,
+    /// Faux tant que Windows n'a pas reçu une image complète (création, changement de réglages).
+    valid: bool,
+    /// Zone dessinée à l'image précédente : à effacer si plus rien ne s'y trouve.
+    prev: Option<Zone>,
 }
 
 impl Overlay {
@@ -162,21 +201,28 @@ impl Overlay {
             return None;
         }
         let old_bmp = SelectObject(mem_dc, bmp as HGDIOBJ);
-        let pm = Pixmap::new(w as u32, h as u32)?;
-        Some(Overlay { hwnd, rect, pm, mem_dc, bmp, old_bmp, bits: bits as *mut u8, shown: false })
+        Some(Overlay { hwnd, rect, mem_dc, bmp, old_bmp, bits: bits as *mut u8, shown: false, valid: false, prev: None })
     }
 
-    /// Copie le Pixmap (RGBA prémultiplié) vers le DIB (BGRA prémultiplié) et pousse la fenêtre.
-    unsafe fn present(&mut self) {
-        let src = self.pm.data();
-        let dst = std::slice::from_raw_parts_mut(self.bits, src.len());
-        for (d, s) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
-            d[0] = s[2];
-            d[1] = s[1];
-            d[2] = s[0];
-            d[3] = s[3];
-        }
+    /// Dessine la zone `z` de l'écran avec `fx`, la recopie dans le DIB (RGBA -> BGRA) et
+    /// l'envoie à Windows. Le reste du DIB n'est pas touché.
+    unsafe fn paint(&mut self, fx: &Fx, z: Zone) {
         let (x, y, w, h) = self.rect;
+        let (zw, zh) = ((z.2 - z.0) as usize, (z.3 - z.1) as usize);
+        let Some(mut pm) = Pixmap::new(zw as u32, zh as u32) else { return };
+        fx.render(&mut pm, (x + z.0, y + z.1));
+        let src = pm.data();
+        let stride = w as usize * 4;
+        for row in 0..zh {
+            let start = (z.1 as usize + row) * stride + z.0 as usize * 4;
+            let dst = std::slice::from_raw_parts_mut(self.bits.add(start), zw * 4);
+            for (d, s) in dst.chunks_exact_mut(4).zip(src[row * zw * 4..(row + 1) * zw * 4].chunks_exact(4)) {
+                d[0] = s[2];
+                d[1] = s[1];
+                d[2] = s[0];
+                d[3] = s[3];
+            }
+        }
         let dst_pt = POINT { x, y };
         let src_pt = POINT { x: 0, y: 0 };
         let size = SIZE { cx: w, cy: h };
@@ -186,7 +232,30 @@ impl Overlay {
             SourceConstantAlpha: 255,
             AlphaFormat: AC_SRC_ALPHA as u8,
         };
-        UpdateLayeredWindow(self.hwnd, null_mut(), &dst_pt, &size, self.mem_dc, &src_pt, 0, &blend, ULW_ALPHA);
+        let dirty = RECT { left: z.0, top: z.1, right: z.2, bottom: z.3 };
+        let info = UPDATELAYEREDWINDOWINFO {
+            cbSize: size_of::<UPDATELAYEREDWINDOWINFO>() as u32,
+            hdcDst: null_mut(),
+            pptDst: &dst_pt,
+            psize: &size,
+            hdcSrc: self.mem_dc,
+            pptSrc: &src_pt,
+            crKey: 0,
+            pblend: &blend,
+            dwFlags: ULW_ALPHA,
+            // la première image doit être complète : Windows n'a encore rien pour cette fenêtre
+            prcDirty: if self.valid { &dirty } else { null() },
+        };
+        UpdateLayeredWindowIndirect(self.hwnd, &info);
+    }
+
+    /// Partie de `r` (coordonnées bureau, f32) qui tombe sur cet écran, en coordonnées locales.
+    fn clip(&self, r: &[f32; 4]) -> Option<Zone> {
+        let (x, y, w, h) = self.rect;
+        let lo = |v: f32, o: i32, n: i32| ((v.floor() as f64 - o as f64).clamp(0.0, n as f64)) as i32;
+        let hi = |v: f32, o: i32, n: i32| ((v.ceil() as f64 - o as f64).clamp(0.0, n as f64)) as i32;
+        let z = (lo(r[0], x, w), lo(r[1], y, h), hi(r[2], x, w), hi(r[3], y, h));
+        (z.2 > z.0 && z.3 > z.1).then_some(z)
     }
 
     unsafe fn set_shown(&mut self, show: bool) {
@@ -226,7 +295,7 @@ fn monitors() -> Vec<(i32, i32, i32, i32)> {
 // ------------------------------------------------------------------ curseurs / icônes
 
 /// Construit un HICON/HCURSOR 32 bits avec alpha depuis un Pixmap (RGBA prémultiplié).
-unsafe fn make_icon(img: &Pixmap, as_cursor: bool) -> HICON {
+pub(crate) unsafe fn make_icon(img: &Pixmap, as_cursor: bool) -> HICON {
     let (w, h) = (img.width() as i32, img.height() as i32);
     let screen = GetDC(null_mut());
     let mut bmi: BITMAPINFO = zeroed();
@@ -310,8 +379,12 @@ pub(crate) struct App {
     last_tick: Instant,
     last_pos: (i32, i32),
     dirty: bool,
+    /// L'image précédente était animée : une image de plus pour effacer sa dernière trace.
+    was_animating: bool,
     cursor_key: Option<String>,
     hotkey_ids: Vec<i32>,
+    /// Raccourcis valides que Windows a refusés (déjà pris ailleurs).
+    hotkey_taken: Vec<&'static str>,
     annotate_vks: Vec<u32>,
     wav: &'static [u8],
     sound_path: Vec<u16>,
@@ -377,16 +450,11 @@ impl App {
 
     /// Prévient la fenêtre de réglages (si elle est ouverte) que les réglages ont changé.
     fn publish(&self) {
-        let h = crate::winui::hwnd();
-        if !h.is_null() {
-            unsafe {
-                PostMessageW(h, crate::winui::WM_REFRESH, 0, 0);
-            }
-        }
+        crate::winui::notify_refresh();
     }
 
     unsafe fn open_settings(&self) {
-        crate::winui::open(self.hinst, &self.fx.s);
+        PostMessageW(self.hwnd, WM_OPEN_SETTINGS, 0, 0);
     }
 
     // --- interface utilisée par la fenêtre de réglages (winui.rs)
@@ -397,6 +465,11 @@ impl App {
 
     pub(crate) unsafe fn ui_apply(&mut self, s: Settings) {
         self.apply_external(s);
+    }
+
+    /// Vrai si `path` désigne un raccourci que Windows a refusé (déjà utilisé ailleurs).
+    pub(crate) fn ui_hotkey_taken(&self, path: &str) -> bool {
+        self.hotkey_taken.contains(&path)
     }
 
     pub(crate) unsafe fn ui_action(&mut self, name: &str) {
@@ -470,21 +543,25 @@ impl App {
         for id in self.hotkey_ids.drain(..) {
             UnregisterHotKey(self.hwnd, id);
         }
+        self.hotkey_taken.clear();
         let hk = self.fx.s.hotkeys.clone();
         let list = [
-            (1, hk.toggle_all),
-            (2, hk.toggle_spotlight),
-            (3, hk.toggle_ring),
-            (4, hk.toggle_trail),
-            (5, hk.toggle_clicks),
-            (6, hk.toggle_cursor),
-            (7, hk.toggle_annotate),
-            (8, hk.clear_annotations),
+            hk.toggle_all,
+            hk.toggle_spotlight,
+            hk.toggle_ring,
+            hk.toggle_trail,
+            hk.toggle_clicks,
+            hk.toggle_cursor,
+            hk.toggle_annotate,
+            hk.clear_annotations,
         ];
-        for (id, text) in list {
-            if let Some((mods, vk)) = parse_hotkey(&text) {
+        for (i, text) in list.iter().enumerate() {
+            let id = i as i32 + 1;
+            if let Some((mods, vk)) = parse_hotkey(text) {
                 if RegisterHotKey(self.hwnd, id, mods | MOD_NOREPEAT, vk) != 0 {
                     self.hotkey_ids.push(id);
+                } else {
+                    self.hotkey_taken.push(HOTKEY_PATHS[i]);
                 }
             }
         }
@@ -640,21 +717,46 @@ impl App {
 
         self.fx.update(dt);
 
-        if moved || had_events || self.dirty || self.fx.animating() {
-            self.dirty = false;
-            self.render_all();
+        let animating = self.fx.animating();
+        if moved || had_events || self.dirty || animating || self.was_animating {
+            let full = std::mem::take(&mut self.dirty);
+            self.render_all(full);
+        }
+        self.was_animating = animating;
+    }
+
+    /// Image déclenchée par un mouvement de souris (hook), au plus une toutes les `KICK_MIN`.
+    unsafe fn kick(&mut self) {
+        if self.last_tick.elapsed() >= KICK_MIN {
+            self.tick();
         }
     }
 
-    unsafe fn render_all(&mut self) {
+    /// `full` : tout repeindre (réglages changés). Sinon, seulement ce qui a bougé.
+    unsafe fn render_all(&mut self, full: bool) {
+        let rects = self.fx.damage();
+        // le fond assombri du spotlight couvre tous les écrans, mais ne change qu'avec les réglages
+        let spot = self.fx.s.enabled && self.fx.s.spotlight.enabled;
         for ov in self.overlays.iter_mut() {
-            if self.fx.visible_in(ov.rect) {
-                self.fx.render(&mut ov.pm, (ov.rect.0, ov.rect.1));
-                ov.present();
-                ov.set_shown(true); // affichée APRÈS le premier UpdateLayeredWindow
+            let (_, _, w, h) = ov.rect;
+            let cur = rects.iter().filter_map(|r| ov.clip(r)).reduce(|a, b| union(Some(a), Some(b)).unwrap());
+            let needed = spot || cur.is_some();
+            let zone = if full || !ov.valid {
+                needed.then_some((0, 0, w, h)) // un écran inutile n'est pas repeint : il reste masqué
             } else {
-                ov.set_shown(false);
+                union(ov.prev, cur)
+            };
+            ov.prev = cur;
+            match zone {
+                Some(z) => {
+                    ov.paint(&self.fx, z);
+                    ov.valid = true;
+                }
+                // écran masqué alors que son image n'est plus à jour : tout repeindre au retour
+                None if !needed && full => ov.valid = false,
+                None => {}
             }
+            ov.set_shown(needed); // affichée APRÈS le premier UpdateLayeredWindow
         }
     }
 }
@@ -673,6 +775,9 @@ unsafe extern "system" fn ll_mouse(code: i32, wparam: WPARAM, lparam: LPARAM) ->
             WM_MBUTTONUP => Some((Button::Middle, false)),
             _ => None,
         };
+        if wparam as u32 == WM_MOUSEMOVE {
+            kick();
+        }
         if let Some((button, down)) = ev {
             let _ = EVENTS.try_with(|e| {
                 if let Ok(mut v) = e.try_borrow_mut() {
@@ -686,14 +791,40 @@ unsafe extern "system" fn ll_mouse(code: i32, wparam: WPARAM, lparam: LPARAM) ->
     CallNextHookEx(null_mut(), code, wparam, lparam)
 }
 
+/// Demande une image (depuis le hook) : un seul WM_KICK en file à la fois. Le hook doit rendre
+/// la main très vite, le rendu se fait donc plus tard, dans la boucle de messages.
+fn kick() {
+    let _ = KICK_PENDING.try_with(|p| {
+        let h = CTL_HWND.with(|c| c.get());
+        if !p.get() && h != 0 {
+            p.set(true);
+            unsafe {
+                PostMessageW(h as HWND, WM_KICK, 0, 0);
+            }
+        }
+    });
+}
+
 unsafe extern "system" fn ctl_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     match msg {
         WM_TIMER => {
             with_app(|a| a.tick());
             0
         }
+        WM_KICK => {
+            KICK_PENDING.with(|p| p.set(false));
+            with_app(|a| a.kick());
+            0
+        }
         WM_HOTKEY => {
             with_app(|a| a.on_hotkey(wp as i32));
+            0
+        }
+        WM_OPEN_SETTINGS => {
+            // copie des réglages, emprunt relâché, puis création de la fenêtre
+            if let Some((hinst, s)) = with_app(|a| (a.hinst, a.fx.s.clone())) {
+                crate::winui::open(hinst, &s);
+            }
             0
         }
         WM_DISPLAYCHANGE => {
@@ -885,6 +1016,7 @@ pub fn run() {
         if hwnd.is_null() {
             return;
         }
+        CTL_HWND.with(|c| c.set(hwnd as usize));
 
         // réglages
         let path = settings_path();
@@ -920,8 +1052,10 @@ pub fn run() {
             last_tick: Instant::now(),
             last_pos: (i32::MIN, i32::MIN),
             dirty: true,
+            was_animating: false,
             cursor_key: None,
             hotkey_ids: Vec::new(),
+            hotkey_taken: Vec::new(),
             annotate_vks: Vec::new(),
             wav,
             sound_path: Vec::new(),

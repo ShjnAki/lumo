@@ -25,7 +25,12 @@ windows-sys = { version = "0.59", features = [
   "Win32_Security",
   "Win32_UI_Controls",
   "Win32_UI_Controls_Dialogs",
+  "Win32_Graphics_Dwm",
 ] }
+# Fenêtre de réglages : WebView2 (préinstallé sur Windows 11), page HTML embarquée dans l'exe.
+wry = { version = "0.57", default-features = false }
+# Boîtes « Parcourir » modernes (IFileOpenDialog) ; même version que celle utilisée par wry.
+windows = { version = "0.62", features = ["Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_System_Com"] }
 
 [profile.release]
 opt-level = 3

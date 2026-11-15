@@ -1,6 +1,9 @@
-//! Fenêtre de réglages native (Win32 + comctl32 v6) : onglets, curseurs, cases à cocher,
-//! listes déroulantes, sélecteur de couleur. Les champs viennent de `lumo::schema` ; chaque
-//! modification est appliquée immédiatement (aperçu en direct) et enregistrée.
+//! Point d'entrée de la fenêtre de réglages (`open`) : l'interface WebView2 (`webui.rs`) si
+//! possible, sinon cette fenêtre native de repli (Win32 + comctl32 v6) : onglets, curseurs, cases
+//! à cocher, listes déroulantes, sélecteur de couleur. Les champs viennent de `lumo::schema` ;
+//! chaque modification est appliquée immédiatement et enregistrée.
+//!
+//! `lumo.exe --native-ui` force la fenêtre native (utile pour tester le repli).
 //!
 //! Tout vit sur le thread de la boucle de messages. L'état de la fenêtre est dans un
 //! `thread_local` accédé uniquement via `try_borrow_mut` : si un message arrive pendant qu'on
@@ -73,9 +76,37 @@ fn with_ui<R>(f: impl FnOnce(&mut Ui) -> R) -> Option<R> {
     UI.with(|c| c.try_borrow_mut().ok().and_then(|mut b| b.as_mut().map(f)))
 }
 
-/// Poignée de la fenêtre ouverte (nulle si fermée) : sert à `IsDialogMessageW` et à `WM_REFRESH`.
+/// Poignée de la fenêtre native ouverte (nulle si fermée) : sert à `IsDialogMessageW`.
 pub fn hwnd() -> HWND {
     UI_HWND.with(|c| c.get()) as HWND
+}
+
+/// Prévient la fenêtre de réglages ouverte (web ou native) que les réglages ont changé ailleurs.
+pub fn notify_refresh() {
+    for h in [hwnd(), crate::webui::hwnd()] {
+        if !h.is_null() {
+            unsafe {
+                PostMessageW(h, WM_REFRESH, 0, 0);
+            }
+        }
+    }
+}
+
+/// Ouvre la fenêtre de réglages, ou ramène au premier plan celle qui est déjà ouverte.
+pub unsafe fn open(hinst: HINSTANCE, settings: &Settings) {
+    if crate::webui::focus_existing() {
+        return;
+    }
+    let native = hwnd();
+    if !native.is_null() && IsWindow(native) != 0 {
+        ShowWindow(native, SW_RESTORE);
+        SetForegroundWindow(native);
+        return;
+    }
+    let force_native = std::env::args().any(|a| a == "--native-ui");
+    if force_native || !crate::webui::open(hinst, settings) {
+        open_native(hinst, settings);
+    }
 }
 
 unsafe fn set_text(h: HWND, text: &str) {
@@ -96,14 +127,7 @@ unsafe fn read_text(h: HWND) -> String {
 
 // ------------------------------------------------------------------ création
 
-pub unsafe fn open(hinst: HINSTANCE, settings: &Settings) {
-    let existing = hwnd();
-    if !existing.is_null() && IsWindow(existing) != 0 {
-        ShowWindow(existing, SW_RESTORE);
-        SetForegroundWindow(existing);
-        return;
-    }
-
+unsafe fn open_native(hinst: HINSTANCE, settings: &Settings) {
     let icc = INITCOMMONCONTROLSEX { dwSize: size_of::<INITCOMMONCONTROLSEX>() as u32, dwICC: ICC_TAB_CLASSES | ICC_BAR_CLASSES };
     InitCommonControlsEx(&icc);
 
@@ -207,7 +231,7 @@ pub unsafe fn open(hinst: HINSTANCE, settings: &Settings) {
                     lbl(&mut label);
                     ctl = mk(0, "BUTTON", "", WS_TABSTOP | BS_OWNERDRAW as u32, s(310), y, s(64), s(24), id);
                 }
-                Kind::Text => {
+                Kind::Text | Kind::Hotkey | Kind::Hold | Kind::File(_) | Kind::Folder => {
                     lbl(&mut label);
                     ctl = mk(WS_EX_CLIENTEDGE, "EDIT", "", WS_TABSTOP | ES_AUTOHSCROLL as u32, s(310), y, s(300), s(24), id);
                 }
@@ -215,7 +239,7 @@ pub unsafe fn open(hinst: HINSTANCE, settings: &Settings) {
             ctls.push(Ctl { field, page: pi, id, label, ctl, value });
         }
         let note_y = top + MAX_ROWS as i32 * s(ROW_H);
-        notes.push(mk(0, "STATIC", page.note, SS_LEFT, s(28), note_y, s(W - 56), s(46), 0));
+        notes.push(mk(0, "STATIC", page.note, SS_LEFT, s(28), note_y, s(W - 56), s(62), 0));
     }
 
     // boutons du bas + statut
@@ -223,7 +247,7 @@ pub unsafe fn open(hinst: HINSTANCE, settings: &Settings) {
     mk(0, "BUTTON", "Effacer les annotations", WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32, s(16), by, s(190), s(30), ID_CLEAR);
     mk(0, "BUTTON", "Restaurer les curseurs Windows", WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32, s(214), by, s(215), s(30), ID_RESTORE);
     mk(0, "BUTTON", "Ouvrir settings.json", WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32, s(437), by, s(187), s(30), ID_JSON);
-    let status = mk(0, "STATIC", "Les changements s'appliquent immédiatement.", WS_VISIBLE | SS_LEFT, s(20), s(H - 38), s(W - 40), s(22), 0);
+    let status = mk(0, "STATIC", "", WS_VISIBLE | SS_LEFT, s(20), s(H - 38), s(W - 40), s(22), 0);
 
     let mut ui = Ui { tab, font, status, ctls, notes, cur: 0, value: serde_json::to_value(settings).unwrap_or(Value::Null) };
     refresh(&mut ui);
@@ -277,7 +301,7 @@ unsafe fn refresh(ui: &mut Ui) {
             Kind::Color => {
                 InvalidateRect(c.ctl, null(), 1);
             }
-            Kind::Text => {
+            Kind::Text | Kind::Hotkey | Kind::Hold | Kind::File(_) | Kind::Folder => {
                 if GetFocus() != c.ctl {
                     set_text(c.ctl, v.as_str().unwrap_or(""));
                 }
@@ -288,14 +312,22 @@ unsafe fn refresh(ui: &mut Ui) {
 
 /// Écrit une valeur dans le JSON local, reconstruit les réglages et les envoie à l'application.
 unsafe fn apply(path: &str, v: Value) {
+    let v = match schema::validate(path, &v) {
+        Ok(v) => v,
+        Err(msg) => {
+            with_ui(|u| set_text(u.status, msg));
+            on_refresh();
+            return;
+        }
+    };
     let parsed = with_ui(|u| {
         schema::set(&mut u.value, path, v);
         serde_json::from_value::<Settings>(u.value.clone())
     });
     let msg = match parsed {
         Some(Ok(s)) => match with_app(|a| a.ui_apply(s)) {
-            Some(()) => "Appliqué et enregistré ✓",
-            None => "Application occupée, réessaie",
+            Some(()) => "Enregistré ✓",
+            None => "Lumo est occupé, réessayez",
         },
         Some(Err(_)) => "Valeur refusée",
         None => return,
@@ -363,7 +395,9 @@ unsafe fn on_command(hwnd: HWND, wp: WPARAM, lp: LPARAM) {
             // la boîte de couleur est modale : aucun emprunt de l'état ne doit être en cours
             pick_color(hwnd, schema::hex_to_colorref(&old)).map(|c| Value::from(schema::colorref_to_hex(c, &old)))
         }
-        Kind::Text if code == EN_KILLFOCUS => Some(Value::from(read_text(ch).trim().to_string())),
+        Kind::Text | Kind::Hotkey | Kind::Hold | Kind::File(_) | Kind::Folder if code == EN_KILLFOCUS => {
+            Some(Value::from(read_text(ch).trim().to_string()))
+        }
         _ => None,
     };
     if let Some(v) = new {
