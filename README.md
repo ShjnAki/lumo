@@ -25,7 +25,7 @@ Lumo is a free, open-source cursor highlighter for Windows, written in Rust. It 
 
 ## Installation
 
-Requirements: Windows 10 (1703 or later) or Windows 11.
+Requirements: Windows 10 (1703 or later) or Windows 11. The settings window uses the Microsoft Edge WebView2 Runtime, which ships with Windows 11 and recent Windows 10 updates; without it, Lumo falls back to a classic Windows settings window. Nothing else is needed: the interface is embedded in `lumo.exe`, with no local server and no browser.
 
 **From source**, with [Rust](https://rustup.rs/) and the MSVC toolchain (Visual Studio Build Tools, "Desktop development with C++" workload):
 
@@ -46,6 +46,15 @@ The GitHub Actions workflow in `.github/workflows/build.yml` also builds `lumo.e
 4. If Lumo is killed abruptly (Task Manager), run `lumo.exe --restore-cursors` to bring back the original Windows cursors.
 
 All settings are listed in [`settings.example.json`](settings.example.json). Colours use `#RRGGBB` or `#RRGGBBAA`.
+
+### Settings window
+
+- A sidebar lists the eight pages (General, Spotlight, Ring, Trail, Clicks, Annotations, Cursor, Hotkeys). The dot next to a page shows whether that effect is on.
+- A live preview at the top of each page runs the real effects engine with your current settings.
+- Each page has its main switch in the header; the other settings are dimmed while it is off.
+- **Detect** buttons record a hotkey or the annotation keys: click, press the keys, release. **Browse…** picks the click sound or the osu! skin folder.
+- The window follows the Windows light or dark theme. `Esc` closes it.
+- `lumo.exe --native-ui` opens the classic Windows window instead (the same one used when WebView2 is missing).
 
 ### osu!-style cursor
 
@@ -85,7 +94,7 @@ Hold **left Ctrl + left Alt** and move the mouse: a stroke is drawn, no click ne
 "annotate": { "enabled": true, "key": "Ctrl+Alt", "color": "#ff3b30", "width": 5, "fade_delay": 2.5 }
 ```
 
-- `key`: keys held together (`Ctrl`, `Alt`, `Shift`, `Win` = left-hand keys; `RCtrl`, `RAlt`, `RShift`, `RWin`, `CapsLock`, letters, digits, `F1`–`F24`). Left-hand keys avoid AltGr, which counts as left Ctrl + right Alt on many layouts (AZERTY, for example).
+- `key`: keys held together (`Ctrl`, `Alt`, `Shift`, `Win` = left-hand keys; `RCtrl`, `RAlt`, `RShift`, `RWin`, `CapsLock`, letters, digits, `F1`–`F24`). Left-hand keys avoid AltGr, which counts as left Ctrl + right Alt on many layouts (AZERTY, for example). In the settings window, **Detect** fills it in: hold the keys, then release.
 - `fade_delay`: seconds before the stroke fades; `0` keeps it until `clear_annotations` (hotkey or tray menu).
 - **The `Fn` key cannot be used.** On almost every keyboard it is handled by the keyboard firmware and Windows never sees it. A workaround is to remap a key to `F13`–`F24` with your keyboard software (iCUE, QMK/VIA, vendor tools), then set `"key": "F13"`.
 
@@ -95,38 +104,39 @@ Hold **left Ctrl + left Alt** and move the mouse: a stroke is drawn, no click ne
 "hotkeys": { "toggle_all": "Ctrl+Alt+L", "toggle_spotlight": "Ctrl+Alt+S", "clear_annotations": "Ctrl+Alt+C" }
 ```
 
-At least one modifier (`Ctrl`, `Alt`, `Shift`, `Win`) is required. Keys: letters, digits, `F1`–`F24`. A hotkey already taken by another application is silently ignored.
+At least one modifier (`Ctrl`, `Alt`, `Shift`, `Win`) is required. Keys: letters, digits, `F1`–`F24`. In the settings window, **Detect** records the combination, and a hotkey already taken by Windows or another application is reported there (it is otherwise ignored).
 
 ## Known limitations
 
-- **Trail latency**: the trail visibly lags behind the cursor. Every visible monitor is currently repainted in full on each frame, and the position is polled every ~8 ms. Planned fixes: repaint only the changed area, render only the active monitor, use the positions from the mouse hook. See the roadmap below.
+- **Trail latency**: Lumo only repaints the area that changed, only on the monitors concerned, and draws a new frame as soon as the mouse hook reports a movement. A small lag remains by nature: Windows draws the hardware cursor directly, while any overlay goes through the desktop compositor and is shown one screen refresh later.
 - **Exclusive full-screen games**: no overlay can be drawn on top (a Windows limitation). Borderless full-screen works.
 - **Application-defined cursors** (some games, web pages using `cursor: url()`): not replaced, because only the standard system cursors are.
 - **System cursor mode**: the alpha channel passed to `CreateIconIndirect` is premultiplied. If the edges look dirty on your setup, switch to `overlay` mode.
 
 ## Roadmap
 
-- A more polished settings interface.
-- Trail latency optimisation.
-- A "detect key" button in the settings window, to pick the annotation key.
 - A Linux port (the effects engine is portable; only the windowing layer is Windows-specific).
 
 ## Architecture
 
 ```
 src/settings.rs   JSON settings (serde), colours, hotkey parsing
-src/fx.rs         effects engine: state + tiny-skia rendering (portable, tested)
+src/fx.rs         effects engine: state + tiny-skia rendering, repaint areas (portable, tested)
 src/skin.rs       osu! skin loading (PNG)
-src/schema.rs     description of the settings (pages, fields, bounds) driving the window; tested
+src/schema.rs     description of the settings (pages, fields, bounds), JSON export and validation; tested
+src/demo.rs       live preview of the settings window: the engine driven by a simulated mouse; tested
 src/win.rs        Win32 layer: overlays, mouse hook, tray icon, hotkeys, cursors
-src/winui.rs      native settings window (tabs, sliders, colour picker), no server or browser
+src/webui.rs      settings window: Win32 window hosting WebView2 (wry), page <-> Rust messages
+ui/index.html     settings page (HTML/CSS/JS, embedded in the exe), built from the schema
+src/winui.rs      settings window entry point and classic Win32 fallback window
 build.rs + lumo.manifest   modern Windows control styles (comctl32 v6) and per-monitor DPI (MSVC)
 src/bin/preview   renders PNG test sheets (saved in docs/), runs on Linux
 ```
 
-- One `WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_NOACTIVATE` window per monitor, per-pixel alpha through `UpdateLayeredWindow`. It never captures a click.
-- Clicks come from a `WH_MOUSE_LL` hook; the position comes from `GetCursorPos`, sampled every ~8 ms.
-- A monitor with nothing to draw has its window hidden. When idle, rendering stops.
+- One `WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_NOACTIVATE` window per monitor, per-pixel alpha through `UpdateLayeredWindowIndirect`. It never captures a click.
+- Clicks come from a `WH_MOUSE_LL` hook. Each movement it reports triggers a frame (at most one every 3 ms); a ~8 ms timer drives animations. The position comes from `GetCursorPos`.
+- Only the changed area is redrawn, converted and sent to Windows (`UpdateLayeredWindowIndirect` with a dirty rectangle). A monitor with nothing to draw has its window hidden. When idle, rendering stops.
+- The settings page never hard-codes a setting: Rust injects `schema::to_json()` and the current settings, the page builds its controls from them and sends `{ path, value }` messages back, which Rust validates (`schema::validate`) before applying.
 - Everything runs on a single thread; application state lives in `thread_local!` cells.
 
 ## Development and testing
@@ -137,9 +147,9 @@ cargo run --release         # run Lumo (Windows, MSVC toolchain)
 cargo run --bin preview     # render PNG test sheets of the effects (docs/)
 ```
 
-- The effects engine and the settings schema are covered by 18 unit tests; rendered output is checked through the PNG sheets in `docs/`.
+- The effects engine, the repaint areas, the live preview and the settings schema are covered by 30 unit tests; rendered output is checked through the PNG sheets in `docs/`.
 - The Win32 layer (overlays, hook, tray icon, settings window) has no automated tests and is verified by hand on Windows.
 
 ## Contributing
 
-Issues and pull requests are welcome. When adding a setting, update `src/settings.rs` and `src/schema.rs`: the schema tests fail if a setting has no matching field in the window.
+Issues and pull requests are welcome. When adding a setting, update `src/settings.rs` and `src/schema.rs`: the schema tests fail if a setting has no matching field in the window. The settings page picks up new fields from the schema on its own.

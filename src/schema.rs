@@ -1,7 +1,8 @@
 //! Schéma de la fenêtre de réglages : quelles pages, quels champs, quels types et bornes.
 //! Portable et testé : la couche Win32 (`winui.rs`) se contente de fabriquer des contrôles depuis ce schéma.
 
-use serde_json::Value;
+use crate::settings::{parse_hold, parse_hotkey, Rgba};
+use serde_json::{json, Value};
 
 pub enum Kind {
     Bool,
@@ -11,6 +12,14 @@ pub enum Kind {
     /// "#RRGGBB" ou "#RRGGBBAA" (l'alpha existant est conservé).
     Color,
     Text,
+    /// Raccourci global « Ctrl+Alt+L » (modificateur obligatoire, vide = aucun) : voir `parse_hotkey`.
+    Hotkey,
+    /// Touches à maintenir ensemble « Ctrl+Alt », « F13 » : voir `parse_hold`.
+    Hold,
+    /// Chemin d'un fichier (vide autorisé) ; l'extension sert de filtre dans la boîte « Parcourir ».
+    File(&'static str),
+    /// Chemin d'un dossier (vide autorisé).
+    Folder,
 }
 
 pub struct Field {
@@ -21,8 +30,12 @@ pub struct Field {
 }
 
 pub struct Page {
+    /// Identifiant stable (icône de la barre latérale, scénario de l'aperçu).
+    pub id: &'static str,
     pub title: &'static str,
     pub note: &'static str,
+    /// Affiche l'aperçu en direct au-dessus des champs.
+    pub preview: bool,
     pub fields: &'static [Field],
 }
 
@@ -67,15 +80,19 @@ const fn f(path: &'static str, label: &'static str, kind: Kind) -> Field {
 
 pub static PAGES: &[Page] = &[
     Page {
+        id: "general",
         title: "Général",
-        note: "Les changements s'appliquent immédiatement et sont enregistrés dans settings.json.",
+        preview: true,
+        note: "Chaque changement est appliqué tout de suite et enregistré dans settings.json.",
         fields: &[
             f("enabled", "Effets activés", Kind::Bool),
             f("shake_to_locate", "Secouer la souris pour localiser le curseur", Kind::Bool),
         ],
     },
     Page {
+        id: "spotlight",
         title: "Spotlight",
+        preview: true,
         note: "",
         fields: &[
             f("spotlight.enabled", "Activer le spotlight", Kind::Bool),
@@ -86,7 +103,9 @@ pub static PAGES: &[Page] = &[
         ],
     },
     Page {
+        id: "ring",
         title: "Anneau",
+        preview: true,
         note: "",
         fields: &[
             f("ring.enabled", "Activer l'anneau", Kind::Bool),
@@ -100,7 +119,9 @@ pub static PAGES: &[Page] = &[
         ],
     },
     Page {
+        id: "trail",
         title: "Traînée",
+        preview: true,
         note: "",
         fields: &[
             f("trail.enabled", "Activer la traînée", Kind::Bool),
@@ -111,8 +132,10 @@ pub static PAGES: &[Page] = &[
         ],
     },
     Page {
+        id: "click",
         title: "Clics",
-        note: "Fichier .wav : laisse vide pour le son intégré.",
+        preview: true,
+        note: "Fichier .wav : laisser vide pour le son intégré.",
         fields: &[
             f("click.enabled", "Activer les effets de clic", Kind::Bool),
             f("click.style", "Style", Kind::Select(CLICKS)),
@@ -121,22 +144,26 @@ pub static PAGES: &[Page] = &[
             f("click.size", "Taille", num(10.0, 400.0, 5.0, " px")),
             f("click.duration", "Durée", num(0.15, 3.0, 0.05, " s")),
             f("sound.enabled", "Son de clic", Kind::Bool),
-            f("sound.file", "Fichier .wav", Kind::Text),
+            f("sound.file", "Fichier .wav", Kind::File("wav")),
         ],
     },
     Page {
+        id: "annotate",
         title: "Annotations",
-        note: "Touches de gauche : Ctrl, Alt, Shift, Win ; lettres, F1-F24 et CapsLock acceptés (ex. Ctrl+Alt).\r\nEffacement à 0 s : le tracé reste jusqu'à effacement manuel.",
+        preview: true,
+        note: "Touches de gauche : Ctrl, Alt, Shift, Win ; lettres, chiffres, F1-F24 et CapsLock acceptés (ex. Ctrl+Alt). La touche Fn est invisible pour Windows : remappez-la vers F13 dans le logiciel du clavier.\nEffacement à 0 s : le tracé reste jusqu'à effacement manuel.",
         fields: &[
             f("annotate.enabled", "Activer les annotations", Kind::Bool),
-            f("annotate.key", "Touches à maintenir", Kind::Text),
+            f("annotate.key", "Touches à maintenir", Kind::Hold),
             f("annotate.color", "Couleur", Kind::Color),
             f("annotate.width", "Épaisseur", num(1.0, 60.0, 1.0, " px")),
             f("annotate.fade_delay", "Effacement après", num(0.0, 30.0, 0.5, " s")),
         ],
     },
     Page {
+        id: "cursor",
         title: "Curseur",
+        preview: true,
         note: "Skin osu! : dossier contenant cursor.png, cursormiddle.png, cursortrail.png. Vide = curseur généré.",
         fields: &[
             f("cursor.mode", "Mode", Kind::Select(CURSORS)),
@@ -145,21 +172,23 @@ pub static PAGES: &[Page] = &[
             f("cursor.outline", "Anneau blanc autour du curseur", Kind::Bool),
             f("cursor.press_scale", "Agrandissement au clic (overlay)", num(0.5, 2.5, 0.05, " x")),
             f("cursor.rotate", "Rotation (cursor.png, overlay)", Kind::Bool),
-            f("cursor.skin_dir", "Dossier d'un skin osu!", Kind::Text),
+            f("cursor.skin_dir", "Dossier d'un skin osu!", Kind::Folder),
         ],
     },
     Page {
+        id: "hotkeys",
         title: "Raccourcis",
+        preview: false,
         note: "Un modificateur (Ctrl, Alt, Shift, Win) est obligatoire, ex. Ctrl+Alt+L. Vide = aucun raccourci.",
         fields: &[
-            f("hotkeys.toggle_all", "Tout activer/désactiver", Kind::Text),
-            f("hotkeys.toggle_spotlight", "Spotlight", Kind::Text),
-            f("hotkeys.toggle_ring", "Anneau", Kind::Text),
-            f("hotkeys.toggle_trail", "Traînée", Kind::Text),
-            f("hotkeys.toggle_clicks", "Effets de clic", Kind::Text),
-            f("hotkeys.toggle_cursor", "Curseur custom", Kind::Text),
-            f("hotkeys.toggle_annotate", "Annotations", Kind::Text),
-            f("hotkeys.clear_annotations", "Effacer les annotations", Kind::Text),
+            f("hotkeys.toggle_all", "Tout activer/désactiver", Kind::Hotkey),
+            f("hotkeys.toggle_spotlight", "Spotlight", Kind::Hotkey),
+            f("hotkeys.toggle_ring", "Anneau", Kind::Hotkey),
+            f("hotkeys.toggle_trail", "Traînée", Kind::Hotkey),
+            f("hotkeys.toggle_clicks", "Effets de clic", Kind::Hotkey),
+            f("hotkeys.toggle_cursor", "Curseur custom", Kind::Hotkey),
+            f("hotkeys.toggle_annotate", "Annotations", Kind::Hotkey),
+            f("hotkeys.clear_annotations", "Effacer les annotations", Kind::Hotkey),
         ],
     },
 ];
@@ -189,6 +218,91 @@ pub fn set(v: &mut Value, path: &str, new: Value) -> bool {
         }
     }
     false
+}
+
+// ------------------------------------------------------------------ export pour l'interface web
+
+/// Le schéma complet en JSON, lu par la page de réglages (`ui/index.html`), qui en génère
+/// toutes les pages : aucune liste de réglages n'est dupliquée côté JavaScript.
+pub fn to_json() -> Value {
+    Value::Array(
+        PAGES
+            .iter()
+            .map(|p| {
+                json!({
+                    "id": p.id,
+                    "title": p.title,
+                    "note": p.note,
+                    "preview": p.preview,
+                    "fields": p.fields.iter().map(field_json).collect::<Vec<_>>(),
+                })
+            })
+            .collect(),
+    )
+}
+
+fn field_json(f: &Field) -> Value {
+    let mut o = json!({ "path": f.path, "label": f.label });
+    let extra = match &f.kind {
+        Kind::Bool => json!({ "type": "bool" }),
+        Kind::Select(opts) => json!({
+            "type": "select",
+            "options": opts.iter().map(|(v, l)| json!({ "value": v, "label": l })).collect::<Vec<_>>(),
+        }),
+        Kind::Num { min, max, step, unit, pct } => {
+            json!({ "type": "num", "min": min, "max": max, "step": step, "unit": unit, "pct": pct })
+        }
+        Kind::Color => json!({ "type": "color" }),
+        Kind::Text => json!({ "type": "text" }),
+        Kind::Hotkey => json!({ "type": "hotkey" }),
+        Kind::Hold => json!({ "type": "hold" }),
+        Kind::File(ext) => json!({ "type": "file", "ext": ext }),
+        Kind::Folder => json!({ "type": "folder" }),
+    };
+    if let (Some(o), Value::Object(e)) = (o.as_object_mut(), extra) {
+        o.extend(e);
+    }
+    o
+}
+
+pub fn field(path: &str) -> Option<&'static Field> {
+    PAGES.iter().flat_map(|p| p.fields.iter()).find(|f| f.path == path)
+}
+
+/// Contrôle une valeur envoyée par l'interface et la normalise (nombres bornés et calés sur le
+/// pas, textes nettoyés). Renvoie un message lisible si elle est refusée.
+pub fn validate(path: &str, v: &Value) -> Result<Value, &'static str> {
+    let fl = field(path).ok_or("Réglage inconnu")?;
+    let text = || v.as_str().map(|s| s.trim().to_string()).ok_or("Valeur invalide");
+    match &fl.kind {
+        Kind::Bool => v.as_bool().map(Value::Bool).ok_or("Valeur invalide"),
+        Kind::Select(opts) => {
+            let s = v.as_str().ok_or("Valeur invalide")?;
+            opts.iter().find(|o| o.0 == s).map(|o| Value::from(o.0)).ok_or("Choix inconnu")
+        }
+        Kind::Num { min, max, step, .. } => {
+            let x = v.as_f64().filter(|x| x.is_finite()).ok_or("Nombre invalide")?;
+            Ok(Value::from(value_of(pos_of(x, *min, *max, *step), *min, *step)))
+        }
+        Kind::Color => {
+            let s = text()?;
+            let c = Rgba::parse(&s).ok_or("Couleur invalide (format #RRGGBB ou #RRGGBBAA)")?;
+            Ok(Value::from(String::from(c)))
+        }
+        Kind::Text | Kind::File(_) | Kind::Folder => text().map(Value::from),
+        Kind::Hotkey => {
+            let s = text()?;
+            if s.is_empty() || parse_hotkey(&s).is_some() {
+                Ok(Value::from(s))
+            } else {
+                Err("Raccourci invalide : un modificateur (Ctrl, Alt, Shift, Win) et une lettre, un chiffre ou F1-F24")
+            }
+        }
+        Kind::Hold => {
+            let s = text()?;
+            parse_hold(&s).map(|_| Value::from(s)).ok_or("Touches invalides (ex. Ctrl+Alt, F13)")
+        }
+    }
 }
 
 // ------------------------------------------------------------------ conversions des contrôles
@@ -252,7 +366,19 @@ mod tests {
                 match &fl.kind {
                     Kind::Bool => assert!(v.is_boolean(), "{}", fl.path),
                     Kind::Num { .. } => assert!(v.is_number(), "{}", fl.path),
-                    Kind::Select(_) | Kind::Color | Kind::Text => assert!(v.is_string(), "{}", fl.path),
+                    Kind::Select(_)
+                    | Kind::Color
+                    | Kind::Text
+                    | Kind::Hotkey
+                    | Kind::Hold
+                    | Kind::File(_)
+                    | Kind::Folder => assert!(v.is_string(), "{}", fl.path),
+                }
+                // la valeur par défaut doit passer la validation telle quelle (f32 -> f64 : à 1e-4 près)
+                let back = validate(fl.path, v).unwrap_or_else(|e| panic!("{} refusé : {e}", fl.path));
+                match (back.as_f64(), v.as_f64()) {
+                    (Some(a), Some(b)) => assert!((a - b).abs() < 1e-4, "{}: {b} -> {a}", fl.path),
+                    _ => assert_eq!(&back, v, "{}", fl.path),
                 }
             }
         }
@@ -339,6 +465,80 @@ mod tests {
         assert!(!set(&mut v, "nope.size", Value::from(1)));
         assert!(set(&mut v, "ring.size", Value::from(42.0)));
         assert_eq!(get(&v, "ring.size").unwrap().as_f64(), Some(42.0));
+    }
+
+    #[test]
+    fn json_export_describes_every_page_and_field() {
+        let j = to_json();
+        let pages = j.as_array().unwrap();
+        assert_eq!(pages.len(), PAGES.len());
+        let mut ids = Vec::new();
+        for (p, jp) in PAGES.iter().zip(pages) {
+            assert_eq!(jp["id"], p.id);
+            assert_eq!(jp["title"], p.title);
+            assert!(!p.note.contains('\r'), "{} : utiliser \\n seul", p.id);
+            ids.push(p.id);
+            let fields = jp["fields"].as_array().unwrap();
+            assert_eq!(fields.len(), p.fields.len());
+            for (f, jf) in p.fields.iter().zip(fields) {
+                assert_eq!(jf["path"], f.path);
+                assert_eq!(jf["label"], f.label);
+                let t = jf["type"].as_str().unwrap();
+                match &f.kind {
+                    Kind::Num { min, max, .. } => {
+                        assert_eq!(t, "num");
+                        assert_eq!(jf["min"].as_f64(), Some(*min));
+                        assert_eq!(jf["max"].as_f64(), Some(*max));
+                    }
+                    Kind::Select(opts) => {
+                        assert_eq!(t, "select");
+                        assert_eq!(jf["options"].as_array().unwrap().len(), opts.len());
+                        assert_eq!(jf["options"][0]["value"], opts[0].0);
+                    }
+                    Kind::File(ext) => assert_eq!((t, jf["ext"].as_str()), ("file", Some(*ext))),
+                    _ => assert!(["bool", "color", "text", "hotkey", "hold", "folder"].contains(&t)),
+                }
+            }
+        }
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), PAGES.len(), "identifiants de page en double");
+    }
+
+    #[test]
+    fn validation() {
+        assert_eq!(validate("ring.size", &json!(33.4)), Ok(json!(33.0)));
+        assert_eq!(validate("ring.size", &json!(9999)), Ok(json!(200.0)));
+        assert!(validate("ring.size", &json!("12")).is_err());
+        assert_eq!(validate("spotlight.dim", &json!(0.333)), Ok(json!(0.33)));
+        assert_eq!(validate("trail.style", &json!("hearts")), Ok(json!("hearts")));
+        assert!(validate("trail.style", &json!("nope")).is_err());
+        assert_eq!(validate("ring.color", &json!(" #FF8000DC ")), Ok(json!("#ff8000dc")));
+        assert_eq!(validate("ring.color", &json!("#ff8000ff")), Ok(json!("#ff8000")));
+        assert!(validate("ring.color", &json!("rouge")).is_err());
+        assert_eq!(validate("hotkeys.toggle_all", &json!(" Ctrl+Alt+L ")), Ok(json!("Ctrl+Alt+L")));
+        assert_eq!(validate("hotkeys.toggle_all", &json!("")), Ok(json!("")));
+        assert_eq!(validate("hotkeys.toggle_all", &json!("Ctrl+Shift+F13")), Ok(json!("Ctrl+Shift+F13")));
+        assert!(validate("hotkeys.toggle_all", &json!("L")).is_err());
+        assert_eq!(validate("annotate.key", &json!("F13")), Ok(json!("F13")));
+        assert_eq!(validate("annotate.key", &json!("RCtrl+RShift")), Ok(json!("RCtrl+RShift")));
+        assert!(validate("annotate.key", &json!("")).is_err());
+        assert!(validate("annotate.key", &json!("Fn")).is_err());
+        assert_eq!(validate("enabled", &json!(false)), Ok(json!(false)));
+        assert!(validate("enabled", &json!(0)).is_err());
+        assert!(validate("ring.nope", &json!(1)).is_err());
+    }
+
+    /// Les noms produits par la détection de touches de la page (`ui/index.html`, `holdName`
+    /// et `hotkeyName`) doivent être acceptés par les parseurs.
+    #[test]
+    fn key_names_from_the_page_parse() {
+        for k in ["Ctrl", "RCtrl", "Alt", "RAlt", "Shift", "RShift", "Win", "RWin", "CapsLock", "A", "Z", "0", "9", "F1", "F13", "F24"] {
+            assert!(parse_hold(k).is_some(), "{k}");
+        }
+        for k in ["Ctrl+A", "Alt+9", "Shift+Win+F13", "Ctrl+Alt+Shift+Win+F24"] {
+            assert!(parse_hotkey(k).is_some(), "{k}");
+        }
     }
 
     #[test]
