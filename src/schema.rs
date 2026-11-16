@@ -87,6 +87,7 @@ pub static PAGES: &[Page] = &[
         fields: &[
             f("enabled", "Effets activés", Kind::Bool),
             f("shake_to_locate", "Secouer la souris pour localiser le curseur", Kind::Bool),
+            f("start_with_windows", "Lancer Lumo au démarrage de Windows", Kind::Bool),
         ],
     },
     Page {

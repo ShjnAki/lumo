@@ -42,8 +42,9 @@ Le workflow GitHub Actions `.github/workflows/build.yml` compile aussi `lumo.exe
 
 1. Lancez `lumo.exe`. Une icône apparaît près de l'horloge et la fenêtre de réglages s'ouvre. L'anneau et les effets de clic sont actifs par défaut.
 2. Un **clic gauche** sur l'icône rouvre la fenêtre de réglages ; un **clic droit** affiche le menu complet. Avec `lumo.exe --minimized`, Lumo démarre directement dans la zone de notification.
-3. Chaque modification est appliquée immédiatement et enregistrée dans `%APPDATA%\Lumo\settings.json`. Le fichier est aussi rechargé à chaud lorsqu'il est modifié à la main.
-4. Si Lumo est arrêté brutalement (gestionnaire des tâches), `lumo.exe --restore-cursors` rétablit les curseurs Windows d'origine.
+3. Pour que Lumo soit actif dès l'ouverture de session, cochez **Lancer Lumo au démarrage de Windows** (page *Général*, ou menu de l'icône). Lumo s'ajoute alors à la clé `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` avec `--minimized` ; décocher l'option retire cette entrée. Si vous déplacez `lumo.exe`, le chemin est mis à jour au lancement suivant.
+4. Chaque modification est appliquée immédiatement et enregistrée dans `%APPDATA%\Lumo\settings.json`. Le fichier est aussi rechargé à chaud lorsqu'il est modifié à la main.
+5. Si Lumo est arrêté brutalement (gestionnaire des tâches), `lumo.exe --restore-cursors` rétablit les curseurs Windows d'origine.
 
 Tous les réglages sont listés dans [`settings.example.json`](settings.example.json). Les couleurs s'écrivent `#RRGGBB` ou `#RRGGBBAA`.
 

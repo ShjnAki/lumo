@@ -723,7 +723,7 @@ const masterOf = p => {
   return f && f.type === "bool" && (f.path === "enabled" || f.path.endsWith(".enabled")) && p.fields.length > 1 ? f : null;
 };
 // « ring.color » dépend de « ring.enabled », « shake_to_locate » de « enabled »
-const depOf = path => { const i = path.lastIndexOf("."); return i < 0 ? "enabled" : path.slice(0, i) + ".enabled"; };
+const depOf = path => { const i = path.lastIndexOf("."); return path === "start_with_windows" ? path : i < 0 ? "enabled" : path.slice(0, i) + ".enabled"; };
 
 function updateDeps() {
   const page = PAGES[cur];

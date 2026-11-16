@@ -209,6 +209,8 @@ pub struct Settings {
     pub click: ClickFx,
     pub sound: Sound,
     pub shake_to_locate: bool,
+    /// Lance Lumo à l'ouverture de session Windows (clé `Run` de l'utilisateur), sans fenêtre.
+    pub start_with_windows: bool,
     pub annotate: Annotate,
     pub cursor: CursorCfg,
     pub hotkeys: Hotkeys,
@@ -298,6 +300,7 @@ impl Default for Settings {
             click: ClickFx::default(),
             sound: Sound::default(),
             shake_to_locate: true,
+            start_with_windows: false,
             annotate: Annotate::default(),
             cursor: CursorCfg::default(),
             hotkeys: Hotkeys::default(),
