@@ -42,8 +42,9 @@ The GitHub Actions workflow in `.github/workflows/build.yml` also builds `lumo.e
 
 1. Run `lumo.exe`. A tray icon appears near the clock and the settings window opens. The ring and click effects are enabled by default.
 2. **Left-click** the tray icon to reopen the settings window. **Right-click** it for the full menu. Start with `lumo.exe --minimized` to launch straight into the tray.
-3. Every change is applied immediately and saved to `%APPDATA%\Lumo\settings.json`. The file is also reloaded live when edited by hand.
-4. If Lumo is killed abruptly (Task Manager), run `lumo.exe --restore-cursors` to bring back the original Windows cursors.
+3. To have Lumo active as soon as you sign in, tick **Start Lumo with Windows** (*General* page, or the tray menu). Lumo then adds itself to `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` with `--minimized`; unticking the option removes the entry. If you move `lumo.exe`, the path is refreshed on the next launch.
+4. Every change is applied immediately and saved to `%APPDATA%\Lumo\settings.json`. The file is also reloaded live when edited by hand.
+5. If Lumo is killed abruptly (Task Manager), run `lumo.exe --restore-cursors` to bring back the original Windows cursors.
 
 All settings are listed in [`settings.example.json`](settings.example.json). Colours use `#RRGGBB` or `#RRGGBBAA`.
 

@@ -391,6 +391,43 @@ pub(crate) struct App {
     hook: HHOOK,
 }
 
+/// 0 = inconnu (à écrire au premier passage, ce qui remet aussi à jour le chemin de l'exe s'il a
+/// bougé), 1 = démarrage automatique actif, 2 = inactif.
+static AUTOSTART: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Ajoute ou retire Lumo de `HKCU\...\Run` (démarrage à l'ouverture de session, sans droits admin).
+/// Lancé avec `--minimized` : pas de fenêtre de réglages au démarrage, juste l'icône de notification.
+unsafe fn set_autostart(on: bool) {
+    use std::sync::atomic::Ordering;
+    use windows_sys::Win32::System::Registry::*;
+    let want = if on { 1 } else { 2 };
+    if AUTOSTART.load(Ordering::Relaxed) == want {
+        return;
+    }
+    let key = wide("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
+    let name = wide("Lumo");
+    let mut hkey: HKEY = null_mut();
+    if RegCreateKeyExW(HKEY_CURRENT_USER, key.as_ptr(), 0, null(), 0, KEY_SET_VALUE, null(), &mut hkey, null_mut()) != 0 {
+        return;
+    }
+    let ok = if on {
+        match std::env::current_exe() {
+            Ok(exe) => {
+                let cmd = wide(&format!("\"{}\" --minimized", exe.display()));
+                RegSetValueExW(hkey, name.as_ptr(), 0, REG_SZ, cmd.as_ptr() as *const u8, (cmd.len() * 2) as u32) == 0
+            }
+            Err(_) => false,
+        }
+    } else {
+        let r = RegDeleteValueW(hkey, name.as_ptr());
+        r == 0 || r == ERROR_FILE_NOT_FOUND
+    };
+    RegCloseKey(hkey);
+    if ok {
+        AUTOSTART.store(want, Ordering::Relaxed);
+    }
+}
+
 fn settings_path() -> PathBuf {
     let base = std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
     base.join("Lumo").join("settings.json")
@@ -494,6 +531,7 @@ impl App {
 
     unsafe fn after_settings_change(&mut self) {
         self.sound_path = wide(&self.fx.s.sound.file);
+        set_autostart(self.fx.s.start_with_windows);
         self.annotate_vks = parse_hold(&self.fx.s.annotate.key).unwrap_or_default();
         self.register_hotkeys();
         self.sync_cursor();
@@ -603,6 +641,7 @@ impl App {
             17 => s.ring.glow = !s.ring.glow,
             18 => s.annotate.enabled = !s.annotate.enabled,
             19 => s.ring.rgb = !s.ring.rgb,
+            20 => s.start_with_windows = !s.start_with_windows,
             100..=102 => s.spotlight.shape = SHAPES[(id - 100) as usize].0,
             110..=117 => s.trail.style = TRAILS[(id - 110) as usize].0,
             120..=126 => s.click.style = CLICKS[(id - 120) as usize].0,
@@ -896,6 +935,8 @@ unsafe fn show_menu(hwnd: HWND) {
     add_item(menu, 14, "Son de clic", s.sound.enabled);
     add_item(menu, 15, "Secouer pour localiser", s.shake_to_locate);
     add_item(menu, 18, &format!("Annotations (maintenir {})", s.annotate.key), s.annotate.enabled);
+    add_sep(menu);
+    add_item(menu, 20, "Lancer au démarrage de Windows", s.start_with_windows);
     add_sep(menu);
     add_sub(menu, "Curseur", |m| {
         for (i, (mode, name)) in CURSORS.iter().enumerate() {
