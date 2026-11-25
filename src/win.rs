@@ -264,6 +264,15 @@ impl Overlay {
             self.shown = show;
         }
     }
+
+    /// Remet la fenêtre tout en haut des fenêtres topmost : une autre fenêtre topmost (barre des
+    /// tâches, menu Démarrer, appli plein écran…) peut sinon passer devant et cacher l'overlay.
+    unsafe fn raise(&self) {
+        // GW_HWNDPREV nul = déjà tout en haut : rien à faire (évite de recomposer pour rien)
+        if self.shown && !GetWindow(self.hwnd, GW_HWNDPREV).is_null() {
+            SetWindowPos(self.hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+    }
 }
 
 impl Drop for Overlay {
@@ -376,6 +385,7 @@ pub(crate) struct App {
     mtime: Option<SystemTime>,
     skin_dir_loaded: String,
     last_check: Instant,
+    last_raise: Instant,
     last_tick: Instant,
     last_pos: (i32, i32),
     dirty: bool,
@@ -726,7 +736,12 @@ impl App {
         let now = Instant::now();
         let dt = now.duration_since(self.last_tick).as_secs_f32();
         self.last_tick = now;
-
+        if now.duration_since(self.last_raise) > Duration::from_millis(300) {
+            self.last_raise = now;
+            for ov in &self.overlays {
+                ov.raise();
+            }
+        }
 
         if now.duration_since(self.last_check) > Duration::from_millis(500) {
             self.last_check = now;
@@ -1090,6 +1105,7 @@ pub fn run() {
             path,
             skin_dir_loaded: skin_dir,
             last_check: Instant::now(),
+            last_raise: Instant::now(),
             last_tick: Instant::now(),
             last_pos: (i32::MIN, i32::MIN),
             dirty: true,
